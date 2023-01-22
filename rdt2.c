@@ -241,7 +241,7 @@ int rdtrecv(char** ret_buf, int sockfd, int recv_window){
 		}
 		if(ret_buf[recv_head->seq_num] == NULL){
 
-			ret_buf[recv_head->seq_num] = recv_buf;
+			ret_buf[recv_head->seq_num] = &recv_buf[HEAD_LEN];
 		}
 	}
 
