@@ -9,6 +9,7 @@
 #include <errno.h>
 
 unsigned short current_sock_timeout = INITIAL_TIME_OUT;
+unsigned short observed_deviation;
 
 static struct sockaddr_in build_sockaddr(char* dest_ip){
 
@@ -93,7 +94,7 @@ int rdtbind(int sockfd, struct sockaddr_in *addr){
 	return 0;
 }
 
-int rdt_send(char** msg, char* dest_ip, int sockfd, int send_window){
+int rdtsend(char** msg, char* dest_ip, int sockfd, int send_window){
 
 	//---checking socket timeout---
 	struct timeval tv;
@@ -136,6 +137,7 @@ int rdt_send(char** msg, char* dest_ip, int sockfd, int send_window){
 	//---defining loop variables---
 	
 	unsigned short time_pass;
+	unsigned short deviation;
 	unsigned short timeout = current_sock_timeout;
 	unsigned short timeout_counter = 0;
 	unsigned char not_done = 1;
@@ -144,7 +146,7 @@ int rdt_send(char** msg, char* dest_ip, int sockfd, int send_window){
 
 	//---send recv loop--
 	
-	while(not_done){
+	while(last_in_order < send_window-1){
 		gettimeofday(&start, NULL);
 
 		for(int i = last_in_order; i < send_window; i++){
@@ -189,11 +191,9 @@ int rdt_send(char** msg, char* dest_ip, int sockfd, int send_window){
 					gettimeofday(&current, NULL);
 					time_pass = (current.tv_sec *1000) + current.tv_usec/1000;
 					time_pass -= (start.tv_sec *1000) + start.tv_usec/1000;
-					current_sock_timeout = current_sock_timeout * 0.875 + (time_pass) * 0.125;
-
+					deviation = observed_deviation * 0.75 + abs(current_sock_timeout - time_pass) * 0.25;
+					current_sock_timeout = current_sock_timeout * 0.875 + (time_pass) * 0.125 +  4 * deviation;
 				}
-				if(last_in_order == send_window-1) not_done = 0;
-
 			} 
 			#ifdef RETFLAG
 			else {
@@ -207,5 +207,44 @@ int rdt_send(char** msg, char* dest_ip, int sockfd, int send_window){
 
 	}
 
+	return 0;
+}
+
+int rdtrecv(char** ret_buf, int sockfd, int recv_window){
+	
+	//--setting variales for receaving message---
+	struct sockaddr_in src_addr;
+	bzero(&src_addr, sizeof(struct sockaddr_in));
+	socklen_t r_addr_len;
+	char recv_buf[MAX_REQ];
+	h_rdt2* recv_head;
+
+	unsigned char last_in_order = 0;
+	h_rdt2 *conf_head = (h_rdt2*)malloc(sizeof(h_rdt2));
+	conf_head->ack = 1;
+	conf_head->msg_size = 0;
+	conf_head->ret = 0;
+	char* conf_buf;
+
+	//---recv loop---
+	while(recvfrom(sockfd, recv_buf, MAX_REQ, 0, (struct sockaddr*)&src_addr, &r_addr_len) != -1 && last_in_order < recv_window-1){
+		recv_head = (h_rdt2*)recv_buf;
+
+		if(recv_head->seq_num > last_in_order+1){
+
+			conf_head->seq_num = last_in_order;
+			conf_head->checksum = checksum((unsigned char*)&conf_head[2], HEAD_LEN - 2);
+			if(sendto(sockfd, &conf_head, HEAD_LEN, 0, (struct sockaddr*)&src_addr, sizeof(src_addr)) == -1){
+				perror("sendto");
+				return -1;
+			}
+		}
+		if(ret_buf[recv_head->seq_num] == NULL){
+
+			ret_buf[recv_head->seq_num] = recv_buf;
+		}
+	}
+
+	free(conf_head);
 	return 0;
 }
